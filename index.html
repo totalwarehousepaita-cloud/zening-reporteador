@@ -74,18 +74,6 @@ async function save(){let acts=MODAL.activities.filter(a=>a.description.trim()||
 }catch(e){console.error(e);alert('No se pudo guardar: '+e.message);btn.disabled=false;btn.textContent='Guardar reporte del día'}}
 async function deleteDay(r){if(!confirm('¿Eliminar el Día '+r.day+' completo?'))return;try{for(let a of r.activities)for(let url of a.photos){let marker='/storage/v1/object/public/'+BUCKET+'/';if(url.includes(marker)){let path=decodeURIComponent(url.split(marker)[1]);await db.storage.from(BUCKET).remove([path])}}let {error}=await db.from('reports').delete().eq('id',r.id);if(error)throw error;await loadReports();render()}catch(e){alert('No se pudo eliminar: '+e.message)}}
 function light(src){let l=document.createElement('div');l.className='light';l.innerHTML=`<img src="${src}">`;l.onclick=()=>l.remove();document.body.appendChild(l)}
-function pdfBody(rs,title){return `<div class="pdf-sheet" style="font-family:Arial,sans-serif;width:760px;background:#fff;color:#111;padding:28px;box-sizing:border-box"><div style="background:#050607;padding:14px 16px;border-bottom:4px solid #1266f1;display:flex;align-items:center;min-height:82px"><img src="${LOGO}" style="display:block;width:180px;height:62px;object-fit:contain;background:#fff"></div><h1 style="font-size:24px;line-height:1.2;margin:22px 0 12px">${title}</h1><div style="font-size:14px;line-height:1.55;margin-bottom:18px"><b>Proyecto:</b> ${esc(PROJECT.name)}<br><b>Cliente:</b> ${esc(PROJECT.client_name)}<br><b>Código:</b> COT-2026-016</div>${rs.map(r=>`<section style="margin-top:18px"><div style="border-top:2px solid #1266f1;padding-top:12px"><h2 style="font-size:19px;margin:0 0 12px">Día ${r.day} · ${r.report_date}</h2></div>${r.activities.map((a,i)=>`<div style="margin:0 0 18px;page-break-inside:avoid;break-inside:avoid"><h3 style="font-size:15px;line-height:1.35;color:#0d4fc1;margin:0 0 7px">Actividad ${i+1}: ${esc(a.scope)}</h3><p style="font-size:14px;line-height:1.5;margin:0 0 10px;white-space:pre-wrap">${esc(a.description)}</p>${a.photos.length?`<div style="display:flex;flex-wrap:wrap;gap:10px">${a.photos.map(p=>`<img src="${p}" crossorigin="anonymous" style="display:block;width:330px;height:235px;object-fit:cover;border:1px solid #d8dee8">`).join('')}</div>`:''}</div>`).join('')}</section>`).join('')}</div>`}
-async function makePdf(rs,name,title){
- let host=document.createElement('div');
- host.style.cssText='position:absolute;left:0;top:0;width:760px;background:#fff;z-index:-9999;pointer-events:none;';
- host.innerHTML=pdfBody(rs,title);
- document.body.appendChild(host);
- const imgs=[...host.querySelectorAll('img')];
- await Promise.all(imgs.map(im=>im.complete&&im.naturalWidth?Promise.resolve():new Promise(r=>{im.onload=r;im.onerror=r})));
- try{
-  await html2pdf().set({margin:[8,8,8,8],filename:name,image:{type:'jpeg',quality:.94},html2canvas:{scale:1.6,useCORS:true,allowTaint:false,scrollX:0,scrollY:0,windowWidth:760},pagebreak:{mode:['css','legacy']},jsPDF:{unit:'mm',format:'a4',orientation:'portrait'}}).from(host.firstElementChild).save();
- } finally { host.remove(); }
-}
 async function imageDataForPdf(src){
  if(!src)return null;
  if(src.startsWith('data:'))return src;
@@ -101,61 +89,55 @@ function addWrappedText(doc,text,x,y,maxWidth,lineHeight=5){
  doc.text(lines,x,y);
  return y+(Math.max(1,lines.length)*lineHeight);
 }
-async function pdfDay(r){
- if(!r.activities||!r.activities.length)return alert('Este día no tiene actividades registradas.');
+async function generateReportPdf(rs,filename,title){
+ if(!rs||!rs.length)return alert('Aún no hay reportes.');
  const {jsPDF}=window.jspdf;
  const doc=new jsPDF({unit:'mm',format:'a4',orientation:'portrait',compress:true});
- const W=210,H=297,M=14,CONTENT=W-M*2;
- const addPage=()=>{doc.addPage();return M};
- let y=M;
- // Encabezado estable, independiente del HTML visible y del scroll del navegador.
- doc.setFillColor(5,6,7);doc.rect(M,y,CONTENT,29,'F');
- try{doc.addImage(LOGO,'JPEG',M+5,y+4,50,21)}catch(e){}
- doc.setDrawColor(18,102,241);doc.setLineWidth(1.2);doc.line(M,y+29,M+CONTENT,y+29);y+=39;
- doc.setTextColor(17,17,17);doc.setFont('helvetica','bold');doc.setFontSize(17);doc.text(`Reporte diario · Día ${r.day}`,M,y);y+=9;
- doc.setFontSize(10.5);doc.setFont('helvetica','bold');doc.text('Proyecto:',M,y);doc.setFont('helvetica','normal');doc.text(String(PROJECT.name||''),M+19,y);y+=5.5;
- doc.setFont('helvetica','bold');doc.text('Cliente:',M,y);doc.setFont('helvetica','normal');doc.text(String(PROJECT.client_name||''),M+16,y);y+=5.5;
- doc.setFont('helvetica','bold');doc.text('Código:',M,y);doc.setFont('helvetica','normal');doc.text('COT-2026-016',M+16,y);y+=5.5;
- doc.setFont('helvetica','bold');doc.text('Fecha:',M,y);doc.setFont('helvetica','normal');doc.text(String(r.report_date||''),M+14,y);y+=9;
- for(let i=0;i<r.activities.length;i++){
-  const a=r.activities[i];
-  if(y>H-45)y=addPage();
-  doc.setDrawColor(18,102,241);doc.setLineWidth(.55);doc.line(M,y,M+CONTENT,y);y+=6;
-  doc.setTextColor(13,79,193);doc.setFont('helvetica','bold');doc.setFontSize(11.5);
-  y=addWrappedText(doc,`Actividad ${i+1}: ${a.scope||'Actividad'}`,M,y,CONTENT,5.2)+2;
-  doc.setTextColor(30,30,30);doc.setFont('helvetica','normal');doc.setFontSize(10.5);
-  y=addWrappedText(doc,a.description||'Sin descripción.',M,y,CONTENT,4.8)+4;
-  const photos=Array.isArray(a.photos)?a.photos:[];
-  for(let j=0;j<photos.length;j+=2){
-   if(y+61>H-M)y=addPage();
-   const pair=photos.slice(j,j+2);
-   const datas=await Promise.all(pair.map(imageDataForPdf));
-   for(let k=0;k<pair.length;k++){
-    const data=datas[k]; if(!data)continue;
-    const x=M+k*91;
-    try{
-     const props=doc.getImageProperties(data),boxW=86,boxH=58;
-     let iw=boxW,ih=iw*(props.height/props.width);
-     if(ih>boxH){ih=boxH;iw=ih*(props.width/props.height)}
-     const ox=x+(boxW-iw)/2,oy=y+(boxH-ih)/2;
-     doc.setDrawColor(216,222,232);doc.rect(x,y,boxW,boxH);
-     doc.addImage(data,props.fileType||'JPEG',ox,oy,iw,ih,undefined,'FAST');
-    }catch(e){console.warn('Imagen omitida del PDF',e)}
+ const W=210,H=297,M=14,CONTENT=W-M*2,FOOTER_Y=286;
+ let firstPage=true,y=M;
+ const logoData=await imageDataForPdf(LOGO);
+ function newPage(){if(!firstPage)doc.addPage();firstPage=false;y=M;return y}
+ function ensure(space){if(y+space>H-18)newPage()}
+ function header(reportTitle){
+  doc.setFillColor(5,6,7);doc.rect(M,y,CONTENT,29,'F');
+  if(logoData){try{const pr=doc.getImageProperties(logoData);let iw=50,ih=iw*(pr.height/pr.width);if(ih>21){ih=21;iw=ih*(pr.width/pr.height)};doc.setFillColor(255,255,255);doc.rect(M+5,y+4,54,21,'F');doc.addImage(logoData,pr.fileType||'PNG',M+7,y+4+(21-ih)/2,iw,ih,undefined,'FAST')}catch(e){}}
+  doc.setDrawColor(18,102,241);doc.setLineWidth(1.2);doc.line(M,y+29,M+CONTENT,y+29);y+=39;
+  doc.setTextColor(17,17,17);doc.setFont('helvetica','bold');doc.setFontSize(17);y=addWrappedText(doc,reportTitle,M,y,CONTENT,7)+3;
+  doc.setFontSize(10.5);doc.setFont('helvetica','bold');doc.text('Proyecto:',M,y);doc.setFont('helvetica','normal');y=addWrappedText(doc,String(PROJECT.name||''),M+19,y,CONTENT-19,5.2);y+=.5;
+  doc.setFont('helvetica','bold');doc.text('Cliente:',M,y);doc.setFont('helvetica','normal');y=addWrappedText(doc,String(PROJECT.client_name||''),M+16,y,CONTENT-16,5.2);y+=.5;
+  doc.setFont('helvetica','bold');doc.text('Código:',M,y);doc.setFont('helvetica','normal');doc.text('COT-2026-016',M+16,y);y+=8;
+ }
+ newPage();header(title);
+ for(let ri=0;ri<rs.length;ri++){
+  const r=rs[ri];
+  ensure(18);
+  doc.setDrawColor(18,102,241);doc.setLineWidth(.65);doc.line(M,y,M+CONTENT,y);y+=6;
+  doc.setTextColor(17,17,17);doc.setFont('helvetica','bold');doc.setFontSize(13.5);doc.text(`Día ${r.day} · ${r.report_date||''}`,M,y);y+=8;
+  const acts=Array.isArray(r.activities)?r.activities:[];
+  if(!acts.length){doc.setFont('helvetica','normal');doc.setFontSize(10.5);doc.setTextColor(80,80,80);doc.text('Sin actividades registradas.',M,y);y+=8;continue}
+  for(let i=0;i<acts.length;i++){
+   const a=acts[i];ensure(22);
+   doc.setTextColor(13,79,193);doc.setFont('helvetica','bold');doc.setFontSize(11.5);y=addWrappedText(doc,`Actividad ${i+1}: ${a.scope||'Actividad'}`,M,y,CONTENT,5.2)+2;
+   doc.setTextColor(30,30,30);doc.setFont('helvetica','normal');doc.setFontSize(10.5);y=addWrappedText(doc,a.description||'Sin descripción.',M,y,CONTENT,4.8)+4;
+   const photos=Array.isArray(a.photos)?a.photos:[];
+   for(let j=0;j<photos.length;j+=2){
+    ensure(63);
+    const pair=photos.slice(j,j+2),datas=await Promise.all(pair.map(imageDataForPdf));
+    for(let k=0;k<pair.length;k++){
+     const data=datas[k];if(!data)continue;const x=M+k*91;
+     try{const props=doc.getImageProperties(data),boxW=86,boxH=58;let iw=boxW,ih=iw*(props.height/props.width);if(ih>boxH){ih=boxH;iw=ih*(props.width/props.height)};const ox=x+(boxW-iw)/2,oy=y+(boxH-ih)/2;doc.setDrawColor(216,222,232);doc.rect(x,y,boxW,boxH);doc.addImage(data,props.fileType||'JPEG',ox,oy,iw,ih,undefined,'FAST')}catch(e){console.warn('Imagen omitida del PDF',e)}
+    }
+    y+=63;
    }
-   y+=63;
+   y+=4;
   }
   y+=3;
  }
- // Pie y numeración en todas las páginas.
  const pages=doc.getNumberOfPages();
- for(let n=1;n<=pages;n++){
-  doc.setPage(n);doc.setDrawColor(216,222,232);doc.setLineWidth(.3);doc.line(M,H-11,W-M,H-11);
-  doc.setTextColor(104,113,129);doc.setFont('helvetica','normal');doc.setFontSize(8.5);
-  doc.text('ZENING SOLUTIONS · Control de ejecución',M,H-6);
-  doc.text(`Página ${n} de ${pages}`,W-M,H-6,{align:'right'});
- }
- doc.save(`Zening_Dia_${r.day}.pdf`);
+ for(let n=1;n<=pages;n++){doc.setPage(n);doc.setDrawColor(216,222,232);doc.setLineWidth(.3);doc.line(M,H-11,W-M,H-11);doc.setTextColor(104,113,129);doc.setFont('helvetica','normal');doc.setFontSize(8.5);doc.text('ZENING SOLUTIONS · Control de ejecución',M,H-6);doc.text(`Página ${n} de ${pages}`,W-M,H-6,{align:'right'})}
+ doc.save(filename);
 }
-function pdfAll(){if(!reports.length)return alert('Aún no hay reportes.');makePdf([...reports].sort((a,b)=>a.day-b.day),'Zening_Reporte_Acumulado.pdf','Reporte acumulado de obra')}
+function pdfDay(r){return generateReportPdf([r],`Zening_Dia_${r.day}.pdf`,`Reporte diario · Día ${r.day}`)}
+function pdfAll(){return generateReportPdf([...reports].sort((a,b)=>a.day-b.day),'Zening_Reporte_Acumulado.pdf','Reporte acumulado de obra')}
 init();
 </script></body></html>
