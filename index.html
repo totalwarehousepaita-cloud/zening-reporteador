@@ -171,7 +171,26 @@ async function generatePdf(rs,filename,title){
  doc.save(filename);
 }
 function pdfDay(r){return generatePdf([r],`Zening_Dia_${r.day}.pdf`,`Reporte diario · Día ${r.day}`)}
-function pdfAll(){return generatePdf([...reports].sort((a,b)=>a.day-b.day),'Zening_Reporte_Acumulado.pdf','Reporte acumulado de obra')}
+async function pdfAll(){
+ // El acumulado siempre se genera desde una lectura fresca de Supabase.
+ // Esto hace que ADMIN y CLIENTE usen exactamente la misma fuente de datos,
+ // evitando que el panel del dueño exporte un estado antiguo mantenido en memoria.
+ try{
+  const {data:rs,error}=await db.from('reports')
+   .select('*,report_activities(*,scope_activities(name))')
+   .eq('project_id',PROJECT.id)
+   .order('day');
+  if(error)throw error;
+  const fresh=(rs||[]).map(r=>({...r,activities:(r.report_activities||[])
+   .sort((a,b)=>String(a.created_at||'').localeCompare(String(b.created_at||'')))
+   .map(a=>({...a,scope:a.scope_activities?.name||'Actividad',photos:Array.isArray(a.photos)?a.photos:[]}))}));
+  return generatePdf(fresh,'Zening_Reporte_Acumulado.pdf','Reporte acumulado de obra');
+ }catch(e){
+  console.error('Error cargando acumulado',e);
+  // Si la red falla, conserva como respaldo los datos que ya están visibles.
+  return generatePdf([...reports].sort((a,b)=>a.day-b.day),'Zening_Reporte_Acumulado.pdf','Reporte acumulado de obra');
+ }
+}
 
 init();
 </script></body></html>
