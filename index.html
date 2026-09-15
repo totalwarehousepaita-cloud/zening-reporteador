@@ -17,9 +17,10 @@ const pct=()=>Math.min(100,Math.round(maxDay()/TOTAL()*100));
 // Datos visuales iniciales: permiten abrir el panel de inmediato mientras Supabase carga por detrás.
 const DEFAULT_SCOPE=['Trabajos preliminares','Charla de seguridad','Inspección de herramientas eléctricas y manuales','Sistema Drywall','Instalación de mamparas y puertas','Instalaciones eléctricas','Sistema de Seguridad y comunicaciones','Instalación de horno eléctrico (ductería y punto de agua)','Trabajos de fachada (letrero y rompetráfico)','Pintura general (paredes y cielo raso)'];
 function bootInstant(){
- COMPANY={slug:COMPANY_SLUG,name:'ZENING SOLUTIONS'};
- PROJECT={slug:PROJECT_SLUG,name:'Tienda La Dominga - Sullana',client_name:'PASTINOR S.A.C LA DOMINGA',location:'Sullana',estimated_days:10};
- SCOPE=DEFAULT_SCOPE.map((name,i)=>({id:'pending-'+(i+1),activity_number:i+1,name}));
+ let cached=null;try{cached=JSON.parse(localStorage.getItem('zening_meta_v1')||'null')}catch(e){}
+ COMPANY=cached?.company||{slug:COMPANY_SLUG,name:'ZENING SOLUTIONS'};
+ PROJECT=cached?.project||{slug:PROJECT_SLUG,name:'Tienda La Dominga - Sullana',client_name:'PASTINOR S.A.C LA DOMINGA',location:'Sullana',estimated_days:10};
+ SCOPE=cached?.scope||DEFAULT_SCOPE.map((name,i)=>({id:'pending-'+(i+1),activity_number:i+1,name}));
  reports=[];
  render();
 }
@@ -38,7 +39,7 @@ async function init(){
    withTimeout(db.from('scope_activities').select('*').eq('project_id',PROJECT.id).order('activity_number'),5000),
    withTimeout(loadReportsFast(),5000)
   ]);
-  if(se)throw se; SCOPE=sc||[];
+  if(se)throw se; SCOPE=sc||[];try{localStorage.setItem('zening_meta_v1',JSON.stringify({company:COMPANY,project:PROJECT,scope:SCOPE}))}catch(e){}
   // Reasignar nombres de alcance una vez cargado el catálogo.
   const sm=Object.fromEntries(SCOPE.map(x=>[x.id,x]));
   reports=reports.map(r=>({...r,activities:r.activities.map(a=>({...a,scope:sm[a.scope_activity_id]?.name||a.scope||'Actividad'}))}));
@@ -48,9 +49,9 @@ async function init(){
  }
 }
 async function loadReportsFast(){
- const {data:rs,error}=await db.from('reports').select('*,report_activities(*)').eq('project_id',PROJECT.id).order('day');
+ const {data:rs,error}=await db.from('reports').select('*,report_activities(*,scope_activities(name))').eq('project_id',PROJECT.id).order('day');
  if(error)throw error;
- reports=(rs||[]).map(r=>({...r,activities:(r.report_activities||[]).sort((a,b)=>String(a.created_at).localeCompare(String(b.created_at))).map(a=>({...a,scope:'Actividad',photos:Array.isArray(a.photos)?a.photos:[]}))}));
+ reports=(rs||[]).map(r=>({...r,activities:(r.report_activities||[]).sort((a,b)=>String(a.created_at).localeCompare(String(b.created_at))).map(a=>({...a,scope:a.scope_activities?.name||'Actividad',photos:Array.isArray(a.photos)?a.photos:[]}))}));
 }
 async function loadReports(){return loadReportsFast()}
 function render(){let a=document.getElementById('app');a.innerHTML=`<div class="topbar"><div class="brand"><img src="${LOGO}"><div class="brand-text"><strong>ZENING SOLUTIONS</strong><span>Control de ejecución</span></div></div><div class="role">${CLIENT?'CLIENTE':'ADMIN'}</div></div><main id="main"></main>`;let m=document.getElementById('main');VIEW==='dashboard'?dashboard(m):project(m)}
@@ -73,11 +74,20 @@ async function save(){let acts=MODAL.activities.filter(a=>a.description.trim()||
 }catch(e){console.error(e);alert('No se pudo guardar: '+e.message);btn.disabled=false;btn.textContent='Guardar reporte del día'}}
 async function deleteDay(r){if(!confirm('¿Eliminar el Día '+r.day+' completo?'))return;try{for(let a of r.activities)for(let url of a.photos){let marker='/storage/v1/object/public/'+BUCKET+'/';if(url.includes(marker)){let path=decodeURIComponent(url.split(marker)[1]);await db.storage.from(BUCKET).remove([path])}}let {error}=await db.from('reports').delete().eq('id',r.id);if(error)throw error;await loadReports();render()}catch(e){alert('No se pudo eliminar: '+e.message)}}
 function light(src){let l=document.createElement('div');l.className='light';l.innerHTML=`<img src="${src}">`;l.onclick=()=>l.remove();document.body.appendChild(l)}
-function pdfBody(rs,title){return `<div style="font-family:Arial;padding:28px;color:#111"><div style="background:#050607;padding:15px;border-bottom:4px solid #1266f1"><img src="${LOGO}" style="width:180px;background:#fff"></div><h1 style="font-size:22px">${title}</h1><p><b>Proyecto:</b> ${esc(PROJECT.name)}<br><b>Cliente:</b> ${esc(PROJECT.client_name)}<br><b>Código:</b> COT-2026-016</p>${rs.map(r=>`<hr><h2>Día ${r.day} · ${r.report_date}</h2>${r.activities.map((a,i)=>`<h3 style="color:#0d4fc1">Actividad ${i+1}: ${esc(a.scope)}</h3><p>${esc(a.description)}</p><div>${a.photos.map(p=>`<img src="${p}" crossorigin="anonymous" style="width:46%;max-height:280px;object-fit:cover;margin:5px">`).join('')}</div>`).join('')}`).join('')}</div>`}
-async function makePdf(rs,name,title){let x=document.createElement('div');x.innerHTML=pdfBody(rs,title);document.body.appendChild(x);await Promise.all([...x.querySelectorAll('img')].map(im=>im.complete?Promise.resolve():new Promise(r=>{im.onload=im.onerror=r})));html2pdf().set({margin:7,filename:name,image:{type:'jpeg',quality:.9},html2canvas:{scale:1.5,useCORS:true},jsPDF:{unit:'mm',format:'a4',orientation:'portrait'}}).from(x).save().then(()=>x.remove())}
+function pdfBody(rs,title){return `<div class="pdf-sheet" style="font-family:Arial,sans-serif;width:760px;background:#fff;color:#111;padding:28px;box-sizing:border-box"><div style="background:#050607;padding:14px 16px;border-bottom:4px solid #1266f1;display:flex;align-items:center;min-height:82px"><img src="${LOGO}" style="display:block;width:180px;height:62px;object-fit:contain;background:#fff"></div><h1 style="font-size:24px;line-height:1.2;margin:22px 0 12px">${title}</h1><div style="font-size:14px;line-height:1.55;margin-bottom:18px"><b>Proyecto:</b> ${esc(PROJECT.name)}<br><b>Cliente:</b> ${esc(PROJECT.client_name)}<br><b>Código:</b> COT-2026-016</div>${rs.map(r=>`<section style="margin-top:18px"><div style="border-top:2px solid #1266f1;padding-top:12px"><h2 style="font-size:19px;margin:0 0 12px">Día ${r.day} · ${r.report_date}</h2></div>${r.activities.map((a,i)=>`<div style="margin:0 0 18px;page-break-inside:avoid;break-inside:avoid"><h3 style="font-size:15px;line-height:1.35;color:#0d4fc1;margin:0 0 7px">Actividad ${i+1}: ${esc(a.scope)}</h3><p style="font-size:14px;line-height:1.5;margin:0 0 10px;white-space:pre-wrap">${esc(a.description)}</p>${a.photos.length?`<div style="display:flex;flex-wrap:wrap;gap:10px">${a.photos.map(p=>`<img src="${p}" crossorigin="anonymous" style="display:block;width:330px;height:235px;object-fit:cover;border:1px solid #d8dee8">`).join('')}</div>`:''}</div>`).join('')}</section>`).join('')}</div>`}
+async function makePdf(rs,name,title){
+ let host=document.createElement('div');
+ host.style.cssText='position:absolute;left:0;top:0;width:760px;background:#fff;z-index:-9999;pointer-events:none;';
+ host.innerHTML=pdfBody(rs,title);
+ document.body.appendChild(host);
+ const imgs=[...host.querySelectorAll('img')];
+ await Promise.all(imgs.map(im=>im.complete&&im.naturalWidth?Promise.resolve():new Promise(r=>{im.onload=r;im.onerror=r})));
+ try{
+  await html2pdf().set({margin:[8,8,8,8],filename:name,image:{type:'jpeg',quality:.94},html2canvas:{scale:1.6,useCORS:true,allowTaint:false,scrollX:0,scrollY:0,windowWidth:760},pagebreak:{mode:['css','legacy']},jsPDF:{unit:'mm',format:'a4',orientation:'portrait'}}).from(host.firstElementChild).save();
+ } finally { host.remove(); }
+}
 async function pdfDay(r){
  if(!r.activities||!r.activities.length)return alert('Este día no tiene actividades registradas.');
- // Usa exactamente el mismo motor estable del PDF acumulado, filtrando solo este día.
  return makePdf([r],`Zening_Dia_${r.day}.pdf`,`Reporte diario · Día ${r.day}`);
 }
 function pdfAll(){if(!reports.length)return alert('Aún no hay reportes.');makePdf([...reports].sort((a,b)=>a.day-b.day),'Zening_Reporte_Acumulado.pdf','Reporte acumulado de obra')}
