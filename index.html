@@ -27,25 +27,32 @@ function withTimeout(p,ms=8000){return Promise.race([p,new Promise((_,rej)=>setT
 async function init(){
  bootInstant();
  try{
-  const {data:c,error:ce}=await withTimeout(db.from('companies').select('*').eq('slug',COMPANY_SLUG).single()); if(ce)throw ce; COMPANY=c;
+  // Carga inicial optimizada: empresa y proyecto en paralelo.
+  const companyQ=withTimeout(db.from('companies').select('*').eq('slug',COMPANY_SLUG).single(),5000);
+  const projectQ=withTimeout(db.from('projects').select('*').eq('slug',PROJECT_SLUG).single(),5000);
+  const [{data:c,error:ce},{data:p,error:pe}]=await Promise.all([companyQ,projectQ]);
+  if(ce)throw ce; if(pe)throw pe; COMPANY=c; PROJECT=p;
   if(CLIENT && clientParam!==COMPANY.client_token){document.getElementById('app').innerHTML='<main><div class="empty">Enlace de cliente no válido.</div></main>';return}
-  const [{data:p,error:pe},{data:sc,error:se}]=await Promise.all([
-   withTimeout(db.from('projects').select('*').eq('company_id',COMPANY.id).eq('slug',PROJECT_SLUG).single()),
-   withTimeout(db.from('projects').select('id').eq('company_id',COMPANY.id).eq('slug',PROJECT_SLUG).single().then(async r=>{if(r.error)return r;return await db.from('scope_activities').select('*').eq('project_id',r.data.id).order('activity_number')}))
+  // Alcance y reportes se descargan al mismo tiempo.
+  const [{data:sc,error:se}]=await Promise.all([
+   withTimeout(db.from('scope_activities').select('*').eq('project_id',PROJECT.id).order('activity_number'),5000),
+   withTimeout(loadReportsFast(),5000)
   ]);
-  if(pe)throw pe; if(se)throw se; PROJECT=p; SCOPE=sc||[];
-  await withTimeout(loadReports()); render();
+  if(se)throw se; SCOPE=sc||[];
+  // Reasignar nombres de alcance una vez cargado el catálogo.
+  const sm=Object.fromEntries(SCOPE.map(x=>[x.id,x]));
+  reports=reports.map(r=>({...r,activities:r.activities.map(a=>({...a,scope:sm[a.scope_activity_id]?.name||a.scope||'Actividad'}))}));
+  render();
  }catch(e){console.error(e);
-  // El panel permanece utilizable visualmente; solo avisamos si el backend no respondió.
   const m=document.getElementById('main'); if(m){const n=document.createElement('div');n.className='empty';n.style.padding='12px';n.textContent='No se pudo actualizar la información. Revisa la conexión e intenta recargar.';m.prepend(n)}
  }
 }
-async function loadReports(){
- const {data:rs,error}=await db.from('reports').select('*').eq('project_id',PROJECT.id).order('day'); if(error)throw error;
- if(!rs?.length){reports=[];return}
- const ids=rs.map(r=>r.id); const {data:acts,error:ae}=await db.from('report_activities').select('*').in('report_id',ids).order('created_at'); if(ae)throw ae;
- const sm=Object.fromEntries(SCOPE.map(x=>[x.id,x])); reports=rs.map(r=>({...r,activities:(acts||[]).filter(a=>a.report_id===r.id).map(a=>({...a,scope:sm[a.scope_activity_id]?.name||'Actividad',photos:Array.isArray(a.photos)?a.photos:[]}))}));
+async function loadReportsFast(){
+ const {data:rs,error}=await db.from('reports').select('*,report_activities(*)').eq('project_id',PROJECT.id).order('day');
+ if(error)throw error;
+ reports=(rs||[]).map(r=>({...r,activities:(r.report_activities||[]).sort((a,b)=>String(a.created_at).localeCompare(String(b.created_at))).map(a=>({...a,scope:'Actividad',photos:Array.isArray(a.photos)?a.photos:[]}))}));
 }
+async function loadReports(){return loadReportsFast()}
 function render(){let a=document.getElementById('app');a.innerHTML=`<div class="topbar"><div class="brand"><img src="${LOGO}"><div class="brand-text"><strong>ZENING SOLUTIONS</strong><span>Control de ejecución</span></div></div><div class="role">${CLIENT?'CLIENTE':'ADMIN'}</div></div><main id="main"></main>`;let m=document.getElementById('main');VIEW==='dashboard'?dashboard(m):project(m)}
 function dashboard(m){m.innerHTML=`<div class="hero"><h1>Panel de proyectos</h1><p>Seguimiento diario de ejecución, actividades y registro fotográfico.</p></div><div class="eyebrow">Proyecto activo</div>`;let d=maxDay(),p=pct();let c=document.createElement('div');c.className='card';c.innerHTML=`<div class="top"><div><h3>${esc(PROJECT.name)}</h3><p>${esc(PROJECT.client_name)} · ${esc(PROJECT.location||'')}</p></div><span class="pill">${d?'Día '+d+' de '+TOTAL():'Sin reportes'}</span></div><div class="track"><div class="fill" style="width:${p}%"></div></div><div class="meta"><span>${reports.length} día(s) reportado(s)</span><span>${p}% · ${TOTAL()} días estimados</span></div>`;c.onclick=()=>{VIEW='project';render()};m.appendChild(c)}
 function project(m){let d=maxDay(),p=pct();m.innerHTML=`${CLIENT?'':'<div class="back" id="back">← Volver a proyectos</div>'}<div class="actions"><button class="link" id="pdf">⬇ PDF acumulado</button>${CLIENT?'':`<button class="link" id="client">👁 Vista cliente</button><button class="link" id="share">🔗 Enviar link al cliente</button>`}</div><div class="detail"><h2>${esc(PROJECT.name)}</h2><p class="sub">${esc(PROJECT.client_name)} · COT-2026-016</p><div class="dayline"><span class="big">${p}%</span><span class="of">avance · Día ${d} de ${TOTAL()}</span></div><div class="track"><div class="fill" style="width:${p}%"></div></div></div><div class="scope"><h3>Alcance del servicio</h3><ul>${SCOPE.map(x=>`<li>${esc(x.name)}</li>`).join('')}</ul></div><div class="eyebrow">Reportes diarios</div><div id="list"></div>`;document.getElementById('back')?.addEventListener('click',()=>{VIEW='dashboard';render()});document.getElementById('pdf').onclick=pdfAll;document.getElementById('client')?.addEventListener('click',()=>window.open(clientUrl(),'_blank'));document.getElementById('share')?.addEventListener('click',shareClient);let list=document.getElementById('list');if(!reports.length)list.innerHTML='<div class="empty">📋<br><br>Todavía no hay reportes de obra.</div>';[...reports].sort((a,b)=>a.day-b.day).forEach(r=>list.appendChild(reportCard(r)));if(!CLIENT){let f=document.createElement('button');f.className='fab';f.textContent='＋ Reportar avance';f.onclick=()=>openModal();m.appendChild(f)}}
@@ -69,27 +76,9 @@ function light(src){let l=document.createElement('div');l.className='light';l.in
 function pdfBody(rs,title){return `<div style="font-family:Arial;padding:28px;color:#111"><div style="background:#050607;padding:15px;border-bottom:4px solid #1266f1"><img src="${LOGO}" style="width:180px;background:#fff"></div><h1 style="font-size:22px">${title}</h1><p><b>Proyecto:</b> ${esc(PROJECT.name)}<br><b>Cliente:</b> ${esc(PROJECT.client_name)}<br><b>Código:</b> COT-2026-016</p>${rs.map(r=>`<hr><h2>Día ${r.day} · ${r.report_date}</h2>${r.activities.map((a,i)=>`<h3 style="color:#0d4fc1">Actividad ${i+1}: ${esc(a.scope)}</h3><p>${esc(a.description)}</p><div>${a.photos.map(p=>`<img src="${p}" crossorigin="anonymous" style="width:46%;max-height:280px;object-fit:cover;margin:5px">`).join('')}</div>`).join('')}`).join('')}</div>`}
 async function makePdf(rs,name,title){let x=document.createElement('div');x.innerHTML=pdfBody(rs,title);document.body.appendChild(x);await Promise.all([...x.querySelectorAll('img')].map(im=>im.complete?Promise.resolve():new Promise(r=>{im.onload=im.onerror=r})));html2pdf().set({margin:7,filename:name,image:{type:'jpeg',quality:.9},html2canvas:{scale:1.5,useCORS:true},jsPDF:{unit:'mm',format:'a4',orientation:'portrait'}}).from(x).save().then(()=>x.remove())}
 async function pdfDay(r){
-  if(!r.activities||!r.activities.length)return alert('Este día no tiene actividades registradas.');
-  const overlay=document.createElement('div');
-  overlay.style.cssText='position:fixed;inset:0;background:#fff;z-index:2147483646;overflow:auto;';
-  const x=document.createElement('div');
-  x.style.cssText='width:794px;min-height:1123px;margin:0 auto;background:#fff;color:#111;box-sizing:border-box;font-family:Arial,sans-serif;';
-  x.innerHTML=`<div style="background:#050607;padding:14px 18px;border-bottom:4px solid #1266f1"><img src="${LOGO}" style="width:170px;background:#fff;display:block"></div>
-  <div style="padding:18px 24px 28px">
-    <h1 style="font-size:22px;margin:0 0 10px">Reporte diario · Día ${r.day}</h1>
-    <p style="font-size:12px;line-height:1.5;margin:0 0 16px"><b>Proyecto:</b> ${esc(PROJECT.name)}<br><b>Cliente:</b> ${esc(PROJECT.client_name)}<br><b>Código:</b> COT-2026-016<br><b>Fecha:</b> ${esc(r.report_date)}</p>
-    ${r.activities.map((a,i)=>`<div class="pdf-day-activity" style="border-top:2px solid #1266f1;padding-top:10px;margin-top:14px;page-break-inside:avoid;break-inside:avoid-page">
-      <h2 style="font-size:16px;color:#0d4fc1;margin:0 0 7px">Actividad ${i+1}: ${esc(a.scope)}</h2>
-      <p style="font-size:12px;line-height:1.5;margin:0 0 10px;white-space:pre-wrap">${esc(a.description||'')}</p>
-      ${a.photos&&a.photos.length?`<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">${a.photos.map(src=>`<div style="page-break-inside:avoid;break-inside:avoid"><img src="${src}" crossorigin="anonymous" style="display:block;width:100%;height:235px;object-fit:contain;background:#f4f5f7;border:1px solid #e2e5ea;border-radius:5px"></div>`).join('')}</div>`:''}
-    </div>`).join('')}
-  </div>`;
-  overlay.appendChild(x);document.body.appendChild(overlay);
-  await Promise.all([...x.querySelectorAll('img')].map(im=>im.complete&&im.naturalWidth?Promise.resolve():new Promise(res=>{im.onload=im.onerror=res})));
-  await new Promise(res=>setTimeout(res,180));
-  try{
-    await html2pdf().set({margin:[6,6,6,6],filename:`Zening_Dia_${r.day}.pdf`,image:{type:'jpeg',quality:.94},html2canvas:{scale:1.7,useCORS:true,allowTaint:false,scrollX:0,scrollY:0,windowWidth:794},pagebreak:{mode:['css','legacy'],avoid:['.pdf-day-activity']},jsPDF:{unit:'mm',format:'a4',orientation:'portrait'}}).from(x).save();
-  }finally{overlay.remove()}
+ if(!r.activities||!r.activities.length)return alert('Este día no tiene actividades registradas.');
+ // Usa exactamente el mismo motor estable del PDF acumulado, filtrando solo este día.
+ return makePdf([r],`Zening_Dia_${r.day}.pdf`,`Reporte diario · Día ${r.day}`);
 }
 function pdfAll(){if(!reports.length)return alert('Aún no hay reportes.');makePdf([...reports].sort((a,b)=>a.day-b.day),'Zening_Reporte_Acumulado.pdf','Reporte acumulado de obra')}
 init();
