@@ -14,14 +14,32 @@ const esc=s=>(s||'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','
 const TOTAL=()=>PROJECT?.estimated_days||10;
 const maxDay=()=>reports.length?Math.max(...reports.map(r=>r.day)):0;
 const pct=()=>Math.min(100,Math.round(maxDay()/TOTAL()*100));
-function loading(msg='Conectando con la base de datos…'){document.getElementById('app').innerHTML=`<div class="topbar"><div class="brand"><img src="${LOGO}"><div class="brand-text"><strong>ZENING SOLUTIONS</strong><span>Control de ejecución</span></div></div></div><main><div class="empty">${msg}</div></main>`}
-async function init(){loading();try{
- const {data:c,error:ce}=await db.from('companies').select('*').eq('slug',COMPANY_SLUG).single(); if(ce)throw ce; COMPANY=c;
- if(CLIENT && clientParam!==COMPANY.client_token){document.getElementById('app').innerHTML='<main><div class="empty">Enlace de cliente no válido.</div></main>';return}
- const {data:p,error:pe}=await db.from('projects').select('*').eq('company_id',COMPANY.id).eq('slug',PROJECT_SLUG).single(); if(pe)throw pe; PROJECT=p;
- const {data:sc,error:se}=await db.from('scope_activities').select('*').eq('project_id',PROJECT.id).order('activity_number'); if(se)throw se; SCOPE=sc||[];
- await loadReports(); render();
-}catch(e){console.error(e);document.getElementById('app').innerHTML=`<main><div class="empty">No se pudo conectar con Supabase.<br><br>${esc(e.message)}</div></main>`}}
+// Datos visuales iniciales: permiten abrir el panel de inmediato mientras Supabase carga por detrás.
+const DEFAULT_SCOPE=['Trabajos preliminares','Charla de seguridad','Inspección de herramientas eléctricas y manuales','Sistema Drywall','Instalación de mamparas y puertas','Instalaciones eléctricas','Sistema de Seguridad y comunicaciones','Instalación de horno eléctrico (ductería y punto de agua)','Trabajos de fachada (letrero y rompetráfico)','Pintura general (paredes y cielo raso)'];
+function bootInstant(){
+ COMPANY={slug:COMPANY_SLUG,name:'ZENING SOLUTIONS'};
+ PROJECT={slug:PROJECT_SLUG,name:'Tienda La Dominga - Sullana',client_name:'PASTINOR S.A.C LA DOMINGA',location:'Sullana',estimated_days:10};
+ SCOPE=DEFAULT_SCOPE.map((name,i)=>({id:'pending-'+(i+1),activity_number:i+1,name}));
+ reports=[];
+ render();
+}
+function withTimeout(p,ms=8000){return Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error('La conexión está tardando más de lo esperado.')),ms))])}
+async function init(){
+ bootInstant();
+ try{
+  const {data:c,error:ce}=await withTimeout(db.from('companies').select('*').eq('slug',COMPANY_SLUG).single()); if(ce)throw ce; COMPANY=c;
+  if(CLIENT && clientParam!==COMPANY.client_token){document.getElementById('app').innerHTML='<main><div class="empty">Enlace de cliente no válido.</div></main>';return}
+  const [{data:p,error:pe},{data:sc,error:se}]=await Promise.all([
+   withTimeout(db.from('projects').select('*').eq('company_id',COMPANY.id).eq('slug',PROJECT_SLUG).single()),
+   withTimeout(db.from('projects').select('id').eq('company_id',COMPANY.id).eq('slug',PROJECT_SLUG).single().then(async r=>{if(r.error)return r;return await db.from('scope_activities').select('*').eq('project_id',r.data.id).order('activity_number')}))
+  ]);
+  if(pe)throw pe; if(se)throw se; PROJECT=p; SCOPE=sc||[];
+  await withTimeout(loadReports()); render();
+ }catch(e){console.error(e);
+  // El panel permanece utilizable visualmente; solo avisamos si el backend no respondió.
+  const m=document.getElementById('main'); if(m){const n=document.createElement('div');n.className='empty';n.style.padding='12px';n.textContent='No se pudo actualizar la información. Revisa la conexión e intenta recargar.';m.prepend(n)}
+ }
+}
 async function loadReports(){
  const {data:rs,error}=await db.from('reports').select('*').eq('project_id',PROJECT.id).order('day'); if(error)throw error;
  if(!rs?.length){reports=[];return}
