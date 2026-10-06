@@ -11,7 +11,7 @@ let VIEW='dashboard', MODAL=null, COMPANY=null, PROJECT=null, SCOPE=[], reports=
 const clientParam=new URLSearchParams(location.search).get('client');
 let CLIENT=!!clientParam;
 const esc=s=>(s||'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));
-const TOTAL=()=>PROJECT?.estimated_days||10;
+const TOTAL=()=>20;
 const maxDay=()=>reports.length?Math.max(...reports.map(r=>r.day)):0;
 const pct=()=>Math.min(100,Math.round(maxDay()/TOTAL()*100));
 // Datos visuales iniciales: permiten abrir el panel de inmediato mientras Supabase carga por detrás.
@@ -19,7 +19,7 @@ const DEFAULT_SCOPE=['Trabajos preliminares','Charla de seguridad','Inspección 
 function bootInstant(){
  let cached=null;try{cached=JSON.parse(localStorage.getItem('zening_meta_v1')||'null')}catch(e){}
  COMPANY=cached?.company||{slug:COMPANY_SLUG,name:'ZENING SOLUTIONS'};
- PROJECT=cached?.project||{slug:PROJECT_SLUG,name:'Tienda La Dominga - Sullana',client_name:'PASTINOR S.A.C LA DOMINGA',location:'Sullana',estimated_days:10};
+ PROJECT=cached?.project||{slug:PROJECT_SLUG,name:'Proyecto Integral',client_name:'PASTINOR S.A.C LA DOMINGA',location:'Sullana',estimated_days:20};
  SCOPE=cached?.scope||DEFAULT_SCOPE.map((name,i)=>({id:'pending-'+(i+1),activity_number:i+1,name}));
  reports=[];
  render();
