@@ -32,7 +32,7 @@ async function init(){
   const companyQ=withTimeout(db.from('companies').select('*').eq('slug',COMPANY_SLUG).single(),5000);
   const projectQ=withTimeout(db.from('projects').select('*').eq('slug',PROJECT_SLUG).single(),5000);
   const [{data:c,error:ce},{data:p,error:pe}]=await Promise.all([companyQ,projectQ]);
-  if(ce)throw ce; if(pe)throw pe; COMPANY=c; PROJECT=p;
+  if(ce)throw ce; if(pe)throw pe; COMPANY=c; PROJECT={...p,name:'Proyecto Integral',estimated_days:20};
   if(CLIENT && clientParam!==COMPANY.client_token){document.getElementById('app').innerHTML='<main><div class="empty">Enlace de cliente no válido.</div></main>';return}
   // Alcance y reportes se descargan al mismo tiempo.
   const [{data:sc,error:se}]=await Promise.all([
